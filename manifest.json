@@ -1,0 +1,78 @@
+{
+  "manifestVersion": 2,
+  "id": "focus-pomodoro",
+  "name": {
+    "en": "Focus Pomodoro",
+    "zh-CN": "专注番茄钟"
+  },
+  "version": "1.1.0",
+  "description": {
+    "en": "A floating Pomodoro timer and full workspace page with a shared countdown and task note. No backend process.",
+    "zh-CN": "从主页面悬浮胶囊或独立页管理番茄计时；倒计时和任务备注实时同步，无需后台进程。"
+  },
+  "details": {
+    "en": "- Use the floating capsule to start or pause without leaving the conversation. Open the full page for presets and a larger timer.\n- Timer state, notes, and daily completions are stored in localStorage and shared between views in the same browser. Refreshing preserves the countdown.\n- Configure Focus / Short Break / Long Break durations in shared Host extension settings.",
+    "zh-CN": "- 无需离开对话即可在悬浮胶囊开始或暂停，打开独立页可查看大计时盘和调整预设。\n- 浏览器 localStorage 保存倒计时、任务备注和每日完成数，在同一浏览器的两个视图间同步，刷新后可续计。\n- 专注 / 短休 / 长休时长通过共享 Host 插件设置保存。"
+  },
+  "author": "codexhost",
+  "categories": [
+    "tools"
+  ],
+  "settingsSchema": [
+    {
+      "key": "focusMinutes",
+      "type": "number",
+      "label": {
+        "en": "Focus Duration (minutes)",
+        "zh-CN": "专注时长（分钟）"
+      },
+      "min": 1,
+      "max": 120,
+      "step": 1,
+      "default": 25
+    },
+    {
+      "key": "shortBreakMinutes",
+      "type": "number",
+      "label": {
+        "en": "Short Break (minutes)",
+        "zh-CN": "短休时长（分钟）"
+      },
+      "min": 1,
+      "max": 60,
+      "step": 1,
+      "default": 5
+    },
+    {
+      "key": "longBreakMinutes",
+      "type": "number",
+      "label": {
+        "en": "Long Break (minutes)",
+        "zh-CN": "长休时长（分钟）"
+      },
+      "min": 1,
+      "max": 90,
+      "step": 1,
+      "default": 15
+    }
+  ],
+  "widget": {
+    "apiVersion": 1,
+    "entry": "widget/index.mjs",
+    "style": "widget/style.css"
+  },
+  "page": {
+    "apiVersion": 1,
+    "entry": "page/index.mjs",
+    "style": "page/style.css",
+    "title": {
+      "en": "Focus Pomodoro",
+      "zh-CN": "专注番茄钟"
+    }
+  },
+  "repository": "https://github.com/BytePioneer-AI/codexhost-ext-focus-pomodoro",
+  "screenshots": [
+    "assets/pomodoro-workspace.png",
+    "assets/pomodoro-widget.png"
+  ]
+}
