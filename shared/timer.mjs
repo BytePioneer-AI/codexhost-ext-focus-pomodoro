@@ -71,6 +71,9 @@ const COPY = {
     },
     dismiss: "Later",
     close: "Dismiss celebration",
+    editDurationHint: "Click to set custom time (e.g. 15 or 01:30)",
+    decreaseDuration: "Decrease by 5 minutes",
+    increaseDuration: "Increase by 5 minutes",
   },
   zh: {
     title: "专注番茄钟",
@@ -125,6 +128,9 @@ const COPY = {
     },
     dismiss: "稍后再说",
     close: "关闭完成提示",
+    editDurationHint: "点击自定义时长（如 15 或 01:30）",
+    decreaseDuration: "减少 5 分钟",
+    increaseDuration: "增加 5 分钟",
   },
 };
 
@@ -155,6 +161,24 @@ export function formatClock(ms) {
   return [Math.floor(seconds / 60), seconds % 60]
     .map((n) => String(n).padStart(2, "0"))
     .join(":");
+}
+
+const MIN_CUSTOM_MS = 1_000;
+const MAX_CUSTOM_MS = 180 * 60_000;
+
+export function parseDurationInput(raw) {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().replaceAll("：", ":");
+  if (!normalized) return null;
+  let totalSeconds = null;
+  const clockMatch = /^(\d{1,3}):(\d{1,2})$/u.exec(normalized);
+  if (clockMatch) {
+    totalSeconds = Number(clockMatch[1]) * 60 + Number(clockMatch[2]);
+  } else if (/^\d+(?:\.\d+)?$/u.test(normalized)) {
+    totalSeconds = Math.round(Number(normalized) * 60);
+  }
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return null;
+  return Math.min(MAX_CUSTOM_MS, Math.max(MIN_CUSTOM_MS, totalSeconds * 1000));
 }
 
 export function nextModeFor(mode, completedToday) {
@@ -283,13 +307,14 @@ function normalize(saved, presets) {
   const mode = MODES.includes(saved?.mode) ? saved.mode : "focus";
   const endAt =
     saved?.running && Number.isFinite(saved.endAt) ? saved.endAt : null;
-  const roundMs =
-    Number.isFinite(saved?.roundMs) && saved.roundMs > 0
-      ? saved.roundMs
-      : Math.max(
-          presets[mode] * 60_000,
-          Number.isFinite(saved?.remainingMs) ? saved.remainingMs : 0,
-        );
+  const hasExplicitRoundMs =
+    Number.isFinite(saved?.roundMs) && saved.roundMs > 0;
+  const roundMs = hasExplicitRoundMs
+    ? Math.min(MAX_CUSTOM_MS, Math.max(MIN_CUSTOM_MS, Math.round(saved.roundMs)))
+    : Math.max(
+        presets[mode] * 60_000,
+        Number.isFinite(saved?.remainingMs) ? saved.remainingMs : 0,
+      );
   let remainingMs = Number.isFinite(saved?.remainingMs)
     ? Math.max(0, saved.remainingMs)
     : null;
@@ -311,7 +336,10 @@ function normalize(saved, presets) {
     running: endAt !== null,
     endAt,
     remainingMs,
-    roundMs: remainingMs === null && endAt === null ? null : roundMs,
+    roundMs:
+      remainingMs === null && endAt === null && !hasExplicitRoundMs
+        ? null
+        : roundMs,
     note: typeof saved?.note === "string" ? saved.note : "",
     completedDate:
       typeof saved?.completedDate === "string"
@@ -907,10 +935,9 @@ export function createTimer(win, api, render) {
             remainingMs: state.endAt - now,
           });
       } else {
-        const roundMs =
-          state.justFinished || state.remainingMs === null
-            ? presets[state.mode] * 60_000
-            : state.roundMs;
+        const roundMs = state.justFinished
+          ? presets[state.mode] * 60_000
+          : (state.roundMs ?? presets[state.mode] * 60_000);
         const remainingMs = state.justFinished
           ? roundMs
           : (state.remainingMs ?? roundMs);
@@ -923,6 +950,44 @@ export function createTimer(win, api, render) {
           celebration: null,
         });
       }
+    },
+    setCustomDuration(ms) {
+      if (state.running) return;
+      if (!Number.isFinite(ms) || ms <= 0) return;
+      const clamped = Math.min(
+        MAX_CUSTOM_MS,
+        Math.max(MIN_CUSTOM_MS, Math.round(ms)),
+      );
+      const presetMs = presets[state.mode] * 60_000;
+      publish({
+        running: false,
+        endAt: null,
+        remainingMs: null,
+        roundMs: clamped === presetMs ? null : clamped,
+        justFinished: false,
+        celebration: null,
+      });
+    },
+    adjustDuration(deltaMinutes) {
+      if (state.running) return;
+      const currentMs = state.roundMs ?? presets[state.mode] * 60_000;
+      const currentMin = Math.round(currentMs / 60_000);
+      const nextMin =
+        deltaMinutes > 0
+          ? currentMin < 5
+            ? 5
+            : Math.min(180, currentMin + deltaMinutes)
+          : Math.max(1, currentMin + deltaMinutes);
+      const clamped = nextMin * 60_000;
+      const presetMs = presets[state.mode] * 60_000;
+      publish({
+        running: false,
+        endAt: null,
+        remainingMs: null,
+        roundMs: clamped === presetMs ? null : clamped,
+        justFinished: false,
+        celebration: null,
+      });
     },
     reset() {
       publish({

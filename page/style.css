@@ -241,12 +241,46 @@
 }
 
 .fp-time {
+  padding: 2px 10px;
+  border-radius: 12px;
   font-size: 58px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   color: var(--cx-page-text, #111827);
+  transition: background-color 150ms ease;
+}
+
+.fp-time[data-editable="true"] {
+  cursor: text;
+}
+
+.fp-time[data-editable="true"]:hover {
+  background: var(--cx-page-surface, rgba(15, 23, 42, 0.05));
+}
+
+.fp-time[hidden],
+.fp-time-input[hidden] {
+  display: none;
+}
+
+.fp-time-input {
+  width: 168px;
+  padding: 2px 10px;
+  border: 1.5px solid var(--fp-tone);
+  border-radius: 12px;
+  background: var(--cx-page-surface, rgba(15, 23, 42, 0.04));
+  color: var(--cx-page-text, #111827);
+  font: inherit;
+  font-size: 50px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--fp-tone-soft);
 }
 
 .fp-dial-sub {

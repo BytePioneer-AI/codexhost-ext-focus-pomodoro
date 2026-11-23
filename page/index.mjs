@@ -3,6 +3,7 @@ import {
   createTimer,
   formatClock,
   MODES,
+  parseDurationInput,
   PRESETS,
 } from "../shared/timer.mjs";
 import { createHistorySection } from "./history.mjs";
@@ -160,8 +161,15 @@ export function mount(root, api) {
   timeEl.setAttribute("role", "timer");
   timeEl.setAttribute("data-fp-time", "");
 
+  const timeInput = el(doc, "input", "fp-time-input");
+  timeInput.type = "text";
+  timeInput.setAttribute("inputmode", "numeric");
+  timeInput.setAttribute("autocomplete", "off");
+  timeInput.setAttribute("spellcheck", "false");
+  timeInput.hidden = true;
+
   const dialSub = el(doc, "div", "fp-dial-sub");
-  dialCenter.append(statusRow, timeEl, dialSub);
+  dialCenter.append(statusRow, timeEl, timeInput, dialSub);
   dialWrap.append(halo, dialSvg, dialCenter);
 
   // Frameless intention input right below dial
@@ -262,8 +270,30 @@ export function mount(root, api) {
   let lastSoundEnabled;
   let currentSoundEnabled = true;
   let currentNextMode = "short";
+  let currentEditable = true;
+  let currentEditValue = "25:00";
   let feedbackKey = "";
   let feedbackTimer;
+
+  function closeTimeEdit(commit) {
+    if (timeInput.hidden) return;
+    const raw = timeInput.value;
+    timeInput.hidden = true;
+    timeEl.hidden = false;
+    if (commit) {
+      const parsedMs = parseDurationInput(raw);
+      if (parsedMs !== null) timer.setCustomDuration(parsedMs);
+    }
+  }
+
+  function openTimeEdit() {
+    if (!currentEditable || !timeInput.hidden) return;
+    timeInput.value = currentEditValue;
+    timeEl.hidden = true;
+    timeInput.hidden = false;
+    timeInput.focus({ preventScroll: true });
+    timeInput.select();
+  }
 
   timer = createTimer(win, api, (state) => {
     const {
@@ -285,6 +315,11 @@ export function mount(root, api) {
     view.dataset.status = status;
     currentSoundEnabled = soundEnabled;
     currentNextMode = nextMode;
+    currentEditable = status === "ready" || status === "done";
+    currentEditValue = formatClock(
+      status === "done" ? presets[mode] * 60_000 : remainingMs,
+    );
+    if (!currentEditable) closeTimeEdit(false);
 
     if (soundEnabled !== lastSoundEnabled) {
       soundBtn.replaceChildren(soundEnabled ? soundOnIcon : soundOffIcon);
@@ -316,6 +351,10 @@ export function mount(root, api) {
 
     timeEl.textContent = formatClock(remainingMs);
     timeEl.dataset.remainingMs = String(remainingMs);
+    timeEl.dataset.editable = String(currentEditable);
+    timeEl.tabIndex = currentEditable ? 0 : -1;
+    timeEl.title = currentEditable ? t.editDurationHint : "";
+    timeInput.setAttribute("aria-label", t.editDurationHint);
     const ratio =
       status === "done"
         ? 1
@@ -383,6 +422,32 @@ export function mount(root, api) {
   toggleBtn.addEventListener("click", timer.toggle, { signal });
   resetBtn.addEventListener("click", timer.reset, { signal });
   completeBtn.addEventListener("click", timer.complete, { signal });
+  timeEl.addEventListener("click", openTimeEdit, { signal });
+  timeEl.addEventListener(
+    "keydown",
+    (event) => {
+      if ((event.key === "Enter" || event.key === " ") && currentEditable) {
+        event.preventDefault();
+        openTimeEdit();
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        closeTimeEdit(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeTimeEdit(false);
+        timeEl.focus({ preventScroll: true });
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener("blur", () => closeTimeEdit(true), { signal });
   nextBanner.addEventListener(
     "click",
     () => timer.startNextRound(currentNextMode),

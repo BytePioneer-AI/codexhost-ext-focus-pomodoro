@@ -2,6 +2,7 @@ import {
   createTimer,
   formatClock,
   MODES,
+  parseDurationInput,
   playCompletionChime,
 } from "../shared/timer.mjs";
 import { createCelebrationOverlay } from "./celebration.mjs";
@@ -345,15 +346,27 @@ export function mount(root, api) {
   });
 
   const face = make("div", "face");
-  const panelTime = make("div", "panel-time");
+  const timeRow = make("div", "time-row");
+  const minusBtn = make("button", "step");
+  minusBtn.textContent = "−";
+  const panelTime = make("button", "panel-time");
   panelTime.setAttribute("role", "timer");
+  const timeInput = make("input", "time-input");
+  timeInput.type = "text";
+  timeInput.setAttribute("inputmode", "numeric");
+  timeInput.setAttribute("autocomplete", "off");
+  timeInput.setAttribute("spellcheck", "false");
+  timeInput.hidden = true;
+  const plusBtn = make("button", "step");
+  plusBtn.textContent = "+";
+  timeRow.append(minusBtn, panelTime, timeInput, plusBtn);
   const track = make("div", "track");
   track.setAttribute("aria-hidden", "true");
   const progress = make("span", "progress");
   track.append(progress);
   const nextChip = make("button", "next-chip");
   nextChip.hidden = true;
-  face.append(panelTime, track, nextChip);
+  face.append(timeRow, track, nextChip);
 
   const label = make("label", "note");
   const noteLabel = make("span");
@@ -394,6 +407,29 @@ export function mount(root, api) {
   let lastSoundEnabled;
   let currentSoundEnabled = true;
   let currentNextMode = "short";
+  let currentEditable = true;
+  let currentEditValue = "25:00";
+
+  function closeTimeEdit(commit) {
+    if (timeInput.hidden) return;
+    const raw = timeInput.value;
+    timeInput.hidden = true;
+    panelTime.hidden = false;
+    if (commit) {
+      const parsedMs = parseDurationInput(raw);
+      if (parsedMs !== null) timer.setCustomDuration(parsedMs);
+    }
+  }
+
+  function openTimeEdit() {
+    if (!currentEditable || !timeInput.hidden) return;
+    timeInput.value = currentEditValue;
+    panelTime.hidden = true;
+    timeInput.hidden = false;
+    timeInput.focus({ preventScroll: true });
+    timeInput.select();
+  }
+
   timer = createTimer(win, api, (state) => {
     const {
       t,
@@ -412,6 +448,11 @@ export function mount(root, api) {
     view.dataset.celebrating = String(Boolean(state.celebration));
     currentSoundEnabled = soundEnabled;
     currentNextMode = nextMode;
+    currentEditable = state.status === "ready" || state.status === "done";
+    currentEditValue = formatClock(
+      state.status === "done" ? presets[mode] * 60_000 : remainingMs,
+    );
+    if (!currentEditable) closeTimeEdit(false);
 
     if (running !== lastRunning)
       toggleGlyph.replaceChildren(running ? pause : play);
@@ -430,6 +471,20 @@ export function mount(root, api) {
     const clock = formatClock(remainingMs);
     setText(time, clock);
     setText(panelTime, clock);
+    panelTime.disabled = !currentEditable;
+    panelTime.dataset.editable = String(currentEditable);
+    panelTime.title = currentEditable ? t.editDurationHint : "";
+    panelTime.setAttribute(
+      "aria-label",
+      currentEditable ? `${clock} · ${t.editDurationHint}` : clock,
+    );
+    minusBtn.hidden = !currentEditable;
+    plusBtn.hidden = !currentEditable;
+    minusBtn.setAttribute("aria-label", t.decreaseDuration);
+    minusBtn.title = t.decreaseDuration;
+    plusBtn.setAttribute("aria-label", t.increaseDuration);
+    plusBtn.title = t.increaseDuration;
+    timeInput.setAttribute("aria-label", t.editDurationHint);
     progress.style.setProperty(
       "--fp-progress",
       state.status === "done" ? 1 : clamp(remainingMs / totalMs, 0, 1),
@@ -488,8 +543,15 @@ export function mount(root, api) {
   win.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape" || event.isComposing || !celebration.isOpen())
+      if (event.key !== "Escape" || event.isComposing) return;
+      if (!timeInput.hidden) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeTimeEdit(false);
+        panelTime.focus({ preventScroll: true });
         return;
+      }
+      if (!celebration.isOpen()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       timer.dismissCelebration();
@@ -501,6 +563,34 @@ export function mount(root, api) {
     view.dataset.scheme = scheme;
   });
   signal.addEventListener("abort", unsubscribeScheme, { once: true });
+  panelTime.addEventListener("click", openTimeEdit, { signal });
+  minusBtn.addEventListener(
+    "click",
+    () => {
+      closeTimeEdit(false);
+      timer.adjustDuration(-5);
+    },
+    { signal },
+  );
+  plusBtn.addEventListener(
+    "click",
+    () => {
+      closeTimeEdit(false);
+      timer.adjustDuration(5);
+    },
+    { signal },
+  );
+  timeInput.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        closeTimeEdit(true);
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener("blur", () => closeTimeEdit(true), { signal });
   for (const [mode, button] of modes)
     button.addEventListener("click", () => timer.setMode(mode), { signal });
   toggle.addEventListener("click", timer.toggle, { signal });
