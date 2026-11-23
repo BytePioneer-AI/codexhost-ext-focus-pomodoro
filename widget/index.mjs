@@ -346,9 +346,6 @@ export function mount(root, api) {
   });
 
   const face = make("div", "face");
-  const timeRow = make("div", "time-row");
-  const minusBtn = make("button", "step");
-  minusBtn.textContent = "−";
   const panelTime = make("button", "panel-time");
   panelTime.setAttribute("role", "timer");
   const timeInput = make("input", "time-input");
@@ -357,16 +354,13 @@ export function mount(root, api) {
   timeInput.setAttribute("autocomplete", "off");
   timeInput.setAttribute("spellcheck", "false");
   timeInput.hidden = true;
-  const plusBtn = make("button", "step");
-  plusBtn.textContent = "+";
-  timeRow.append(minusBtn, panelTime, timeInput, plusBtn);
   const track = make("div", "track");
   track.setAttribute("aria-hidden", "true");
   const progress = make("span", "progress");
   track.append(progress);
   const nextChip = make("button", "next-chip");
   nextChip.hidden = true;
-  face.append(timeRow, track, nextChip);
+  face.append(panelTime, timeInput, track, nextChip);
 
   const label = make("label", "note");
   const noteLabel = make("span");
@@ -478,12 +472,6 @@ export function mount(root, api) {
       "aria-label",
       currentEditable ? `${clock} · ${t.editDurationHint}` : clock,
     );
-    minusBtn.hidden = !currentEditable;
-    plusBtn.hidden = !currentEditable;
-    minusBtn.setAttribute("aria-label", t.decreaseDuration);
-    minusBtn.title = t.decreaseDuration;
-    plusBtn.setAttribute("aria-label", t.increaseDuration);
-    plusBtn.title = t.increaseDuration;
     timeInput.setAttribute("aria-label", t.editDurationHint);
     progress.style.setProperty(
       "--fp-progress",
@@ -564,22 +552,6 @@ export function mount(root, api) {
   });
   signal.addEventListener("abort", unsubscribeScheme, { once: true });
   panelTime.addEventListener("click", openTimeEdit, { signal });
-  minusBtn.addEventListener(
-    "click",
-    () => {
-      closeTimeEdit(false);
-      timer.adjustDuration(-5);
-    },
-    { signal },
-  );
-  plusBtn.addEventListener(
-    "click",
-    () => {
-      closeTimeEdit(false);
-      timer.adjustDuration(5);
-    },
-    { signal },
-  );
   timeInput.addEventListener(
     "keydown",
     (event) => {

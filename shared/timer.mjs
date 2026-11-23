@@ -72,8 +72,6 @@ const COPY = {
     dismiss: "Later",
     close: "Dismiss celebration",
     editDurationHint: "Click to set custom time (e.g. 15 or 01:30)",
-    decreaseDuration: "Decrease by 5 minutes",
-    increaseDuration: "Increase by 5 minutes",
   },
   zh: {
     title: "专注番茄钟",
@@ -129,8 +127,6 @@ const COPY = {
     dismiss: "稍后再说",
     close: "关闭完成提示",
     editDurationHint: "点击自定义时长（如 15 或 01:30）",
-    decreaseDuration: "减少 5 分钟",
-    increaseDuration: "增加 5 分钟",
   },
 };
 
@@ -958,27 +954,6 @@ export function createTimer(win, api, render) {
         MAX_CUSTOM_MS,
         Math.max(MIN_CUSTOM_MS, Math.round(ms)),
       );
-      const presetMs = presets[state.mode] * 60_000;
-      publish({
-        running: false,
-        endAt: null,
-        remainingMs: null,
-        roundMs: clamped === presetMs ? null : clamped,
-        justFinished: false,
-        celebration: null,
-      });
-    },
-    adjustDuration(deltaMinutes) {
-      if (state.running) return;
-      const currentMs = state.roundMs ?? presets[state.mode] * 60_000;
-      const currentMin = Math.round(currentMs / 60_000);
-      const nextMin =
-        deltaMinutes > 0
-          ? currentMin < 5
-            ? 5
-            : Math.min(180, currentMin + deltaMinutes)
-          : Math.max(1, currentMin + deltaMinutes);
-      const clamped = nextMin * 60_000;
       const presetMs = presets[state.mode] * 60_000;
       publish({
         running: false,
