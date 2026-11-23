@@ -1,9 +1,17 @@
-import { createTimer, formatClock, MODES } from "../shared/timer.mjs";
+import {
+  createTimer,
+  formatClock,
+  MODES,
+  parseDurationInput,
+  playCompletionChime,
+} from "../shared/timer.mjs";
+import { createCelebrationOverlay } from "./celebration.mjs";
 
 const POSITION_KEY = "codexhost.focus-pomodoro.widget-pos.v1";
 const SNAP_DISTANCE = 32;
 const DRAG_THRESHOLD = 5;
 const TUCK_RATIO = 0.44;
+const IDLE_PEEK_PX = 36;
 const PANEL_GAP = 10;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -60,6 +68,7 @@ function positionCapsule(view, capsule, expand, panel, win, signal) {
   let dragged = false;
   let panelSize;
   view.style.setProperty("--fp-tuck", `${TUCK_RATIO * 100}%`);
+  view.style.setProperty("--fp-idle-peek", `${IDLE_PEEK_PX}px`);
 
   function measurePanel() {
     const width = panel.offsetWidth;
@@ -164,7 +173,7 @@ function positionCapsule(view, capsule, expand, panel, win, signal) {
 
   function moveDuringDrag(x, y) {
     const { width, height, w, h } = bounds;
-    const tuck = width * TUCK_RATIO;
+    const tuck = Math.max(width * TUCK_RATIO, width - IDLE_PEEK_PX);
     move(clamp(x, -tuck, w - width + tuck), clamp(y, 0, h - height));
   }
 
@@ -312,9 +321,22 @@ export function mount(root, api) {
   const header = make("header", "header");
   const title = make("strong");
   title.id = "fp-timer-title";
+  const headerRight = make("div", "header-right");
+  const soundBtn = make("button", "sound");
+  const soundOnIcon = icon(
+    doc,
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10-1.2a4 4 0 0 1 0 5.4m2.1-7.5a7 7 0 0 1 0 9.6",
+    { "stroke-width": "1.5" },
+  );
+  const soundOffIcon = icon(
+    doc,
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10 0 4 4m0-4-4 4",
+    { "stroke-width": "1.5" },
+  );
   const status = make("span", "status");
   status.setAttribute("role", "status");
-  header.append(title, status);
+  headerRight.append(soundBtn, status);
+  header.append(title, headerRight);
   const modeGroup = make("div", "modes");
   const modes = MODES.map((mode) => {
     const button = make("button");
@@ -324,13 +346,21 @@ export function mount(root, api) {
   });
 
   const face = make("div", "face");
-  const panelTime = make("div", "panel-time");
+  const panelTime = make("button", "panel-time");
   panelTime.setAttribute("role", "timer");
+  const timeInput = make("input", "time-input");
+  timeInput.type = "text";
+  timeInput.setAttribute("inputmode", "numeric");
+  timeInput.setAttribute("autocomplete", "off");
+  timeInput.setAttribute("spellcheck", "false");
+  timeInput.hidden = true;
   const track = make("div", "track");
   track.setAttribute("aria-hidden", "true");
   const progress = make("span", "progress");
   track.append(progress);
-  face.append(panelTime, track);
+  const nextChip = make("button", "next-chip");
+  nextChip.hidden = true;
+  face.append(panelTime, timeInput, track, nextChip);
 
   const label = make("label", "note");
   const noteLabel = make("span");
@@ -354,27 +384,108 @@ export function mount(root, api) {
   dots.append(...rounds);
   footer.append(countGroup, dots);
   panel.append(header, modeGroup, face, label, actions, footer);
-  view.append(capsule, panel);
+
+  let timer;
+  const celebration = createCelebrationOverlay(doc, {
+    onDismiss: () => timer?.dismissCelebration(),
+    onStartNext: (nextMode) => timer?.startNextRound(nextMode),
+  });
+
+  view.append(capsule, panel, celebration.element);
   root.replaceChildren(view);
 
   const setText = (node, text) => {
     if (node.textContent !== text) node.textContent = text;
   };
   let lastRunning;
-  const timer = createTimer(win, api, (state) => {
-    const { t, mode, running, remainingMs, totalMs, completedToday } = state;
+  let lastSoundEnabled;
+  let currentSoundEnabled = true;
+  let currentNextMode = "short";
+  let currentEditable = true;
+  let currentEditValue = "25:00";
+
+  function closeTimeEdit(commit) {
+    if (timeInput.hidden) return;
+    const raw = timeInput.value;
+    timeInput.hidden = true;
+    panelTime.hidden = false;
+    if (commit) {
+      const parsedMs = parseDurationInput(raw);
+      if (parsedMs !== null) timer.setCustomDuration(parsedMs);
+    }
+  }
+
+  function openTimeEdit() {
+    if (!currentEditable || !timeInput.hidden) return;
+    timeInput.value = currentEditValue;
+    panelTime.hidden = true;
+    timeInput.hidden = false;
+    timeInput.focus({ preventScroll: true });
+    timeInput.select();
+  }
+
+  timer = createTimer(win, api, (state) => {
+    const {
+      t,
+      mode,
+      running,
+      remainingMs,
+      totalMs,
+      completedToday,
+      presets,
+      soundEnabled,
+      nextMode,
+    } = state;
     view.dataset.mode = mode;
     view.dataset.running = String(running);
+    view.dataset.status = state.status;
+    view.dataset.celebrating = String(Boolean(state.celebration));
+    currentSoundEnabled = soundEnabled;
+    currentNextMode = nextMode;
+    currentEditable = state.status === "ready" || state.status === "done";
+    currentEditValue = formatClock(
+      state.status === "done" ? presets[mode] * 60_000 : remainingMs,
+    );
+    if (!currentEditable) closeTimeEdit(false);
+
     if (running !== lastRunning)
       toggleGlyph.replaceChildren(running ? pause : play);
     lastRunning = running;
+
+    if (soundEnabled !== lastSoundEnabled) {
+      soundBtn.replaceChildren(soundEnabled ? soundOnIcon : soundOffIcon);
+      soundBtn.dataset.muted = String(!soundEnabled);
+      lastSoundEnabled = soundEnabled;
+    }
+    const soundLabel = soundEnabled ? t.soundOn : t.soundOff;
+    soundBtn.setAttribute("aria-label", soundLabel);
+    soundBtn.setAttribute("aria-pressed", String(soundEnabled));
+    soundBtn.title = soundLabel;
+
     const clock = formatClock(remainingMs);
     setText(time, clock);
     setText(panelTime, clock);
+    panelTime.disabled = !currentEditable;
+    panelTime.dataset.editable = String(currentEditable);
+    panelTime.title = currentEditable ? t.editDurationHint : "";
+    panelTime.setAttribute(
+      "aria-label",
+      currentEditable ? `${clock} · ${t.editDurationHint}` : clock,
+    );
+    timeInput.setAttribute("aria-label", t.editDurationHint);
     progress.style.setProperty(
       "--fp-progress",
-      clamp(remainingMs / totalMs, 0, 1),
+      state.status === "done" ? 1 : clamp(remainingMs / totalMs, 0, 1),
     );
+    const showNextChip = state.status === "done";
+    nextChip.hidden = !showNextChip;
+    if (showNextChip) {
+      setText(
+        nextChip,
+        `${t.nextHint[nextMode].replace("{min}", String(presets[nextMode]))} →`,
+      );
+    }
+
     const action = running ? t.pause : t.start;
     toggle.setAttribute("aria-label", action);
     toggle.title = action;
@@ -405,20 +516,69 @@ export function mount(root, api) {
       setText(button, t.modes[value]);
       button.setAttribute("aria-pressed", String(value === mode));
     }
+
+    celebration.update(state);
+    if (
+      state.celebration &&
+      soundEnabled &&
+      Date.now() - state.celebration.announcedAt < 10_000
+    ) {
+      playCompletionChime(win, state.celebration.mode, state.celebration.id);
+    }
   });
 
   const { signal } = timer;
+  win.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      if (!timeInput.hidden) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeTimeEdit(false);
+        panelTime.focus({ preventScroll: true });
+        return;
+      }
+      if (!celebration.isOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      timer.dismissCelebration();
+    },
+    { capture: true, signal },
+  );
   positionCapsule(view, capsule, expand, panel, win, signal);
   const unsubscribeScheme = api.onColorSchemeChange((scheme) => {
     view.dataset.scheme = scheme;
   });
   signal.addEventListener("abort", unsubscribeScheme, { once: true });
+  panelTime.addEventListener("click", openTimeEdit, { signal });
+  timeInput.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        closeTimeEdit(true);
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener("blur", () => closeTimeEdit(true), { signal });
   for (const [mode, button] of modes)
     button.addEventListener("click", () => timer.setMode(mode), { signal });
   toggle.addEventListener("click", timer.toggle, { signal });
   panelToggle.addEventListener("click", timer.toggle, { signal });
   reset.addEventListener("click", timer.reset, { signal });
   complete.addEventListener("click", timer.complete, { signal });
+  nextChip.addEventListener(
+    "click",
+    () => timer.startNextRound(currentNextMode),
+    { signal },
+  );
+  soundBtn.addEventListener(
+    "click",
+    () => void timer.setSoundEnabled(!currentSoundEnabled).catch(() => {}),
+    { signal },
+  );
   note.addEventListener("input", () => timer.setNote(note.value), { signal });
   return () => {
     timer.dispose();

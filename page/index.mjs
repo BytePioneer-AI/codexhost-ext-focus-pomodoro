@@ -1,4 +1,12 @@
-import { createTimer, formatClock, MODES, PRESETS } from "../shared/timer.mjs";
+import {
+  computeHistoryStats,
+  createTimer,
+  formatClock,
+  MODES,
+  parseDurationInput,
+  PRESETS,
+} from "../shared/timer.mjs";
+import { createHistorySection } from "./history.mjs";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -100,7 +108,7 @@ export function mount(root, api) {
   view.dataset.fpHost = api.hostTarget;
   view.dataset.scheme = api.colorScheme;
 
-  // 1. Centered Segmented Mode Bar
+  // 1. Centered Segmented Mode Bar + Sound Toggle
   const topBar = el(doc, "div", "fp-topbar");
   const modeGroup = el(doc, "div", "fp-modes");
   modeGroup.setAttribute("role", "group");
@@ -112,7 +120,29 @@ export function mount(root, api) {
     modeGroup.append(btn);
     modeButtons.set(mode, btn);
   }
-  topBar.append(modeGroup);
+  const soundBtn = el(doc, "button", "fp-sound-btn");
+  soundBtn.type = "button";
+  const makeSoundIcon = (d) => {
+    const svg = doc.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 20 20");
+    svg.setAttribute("aria-hidden", "true");
+    const path = doc.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.6");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    return svg;
+  };
+  const soundOnIcon = makeSoundIcon(
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10-1.2a4 4 0 0 1 0 5.4m2.1-7.5a7 7 0 0 1 0 9.6",
+  );
+  const soundOffIcon = makeSoundIcon(
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10 0 4 4m0-4-4 4",
+  );
+  topBar.append(modeGroup, soundBtn);
 
   // 2. Hero Zen Chronometer Stage
   const stage = el(doc, "section", "fp-stage");
@@ -131,8 +161,15 @@ export function mount(root, api) {
   timeEl.setAttribute("role", "timer");
   timeEl.setAttribute("data-fp-time", "");
 
+  const timeInput = el(doc, "input", "fp-time-input");
+  timeInput.type = "text";
+  timeInput.setAttribute("inputmode", "numeric");
+  timeInput.setAttribute("autocomplete", "off");
+  timeInput.setAttribute("spellcheck", "false");
+  timeInput.hidden = true;
+
   const dialSub = el(doc, "div", "fp-dial-sub");
-  dialCenter.append(statusRow, timeEl, dialSub);
+  dialCenter.append(statusRow, timeEl, timeInput, dialSub);
   dialWrap.append(halo, dialSvg, dialCenter);
 
   // Frameless intention input right below dial
@@ -157,7 +194,12 @@ export function mount(root, api) {
   completeBtn.setAttribute("data-fp-complete", "");
 
   controls.append(resetBtn, toggleBtn, completeBtn);
-  stage.append(dialWrap, intentWrap, controls);
+
+  const nextBanner = el(doc, "button", "fp-next-banner");
+  nextBanner.type = "button";
+  nextBanner.hidden = true;
+
+  stage.append(dialWrap, intentWrap, controls, nextBanner);
 
   // 3. Quiet Bottom Bar (Today's Rhythm + Compact Inline Presets)
   const dock = el(doc, "div", "fp-dock");
@@ -219,20 +261,75 @@ export function mount(root, api) {
   dock.append(rhythmCard, presetsForm);
 
   const hintFooter = el(doc, "div", "fp-hint-footer");
+  let timer;
+  let historySection;
   view.append(topBar, stage, dock, hintFooter);
   root.replaceChildren(view);
 
   let lastPresets;
+  let lastSoundEnabled;
+  let currentSoundEnabled = true;
+  let currentNextMode = "short";
+  let currentEditable = true;
+  let currentEditValue = "25:00";
   let feedbackKey = "";
   let feedbackTimer;
 
-  const timer = createTimer(win, api, (state) => {
-    const { t, mode, remainingMs, totalMs, presets, running, status, completedToday } = state;
+  function closeTimeEdit(commit) {
+    if (timeInput.hidden) return;
+    const raw = timeInput.value;
+    timeInput.hidden = true;
+    timeEl.hidden = false;
+    if (commit) {
+      const parsedMs = parseDurationInput(raw);
+      if (parsedMs !== null) timer.setCustomDuration(parsedMs);
+    }
+  }
+
+  function openTimeEdit() {
+    if (!currentEditable || !timeInput.hidden) return;
+    timeInput.value = currentEditValue;
+    timeEl.hidden = true;
+    timeInput.hidden = false;
+    timeInput.focus({ preventScroll: true });
+    timeInput.select();
+  }
+
+  timer = createTimer(win, api, (state) => {
+    const {
+      t,
+      mode,
+      remainingMs,
+      totalMs,
+      presets,
+      running,
+      status,
+      completedToday,
+      soundEnabled,
+      nextMode,
+    } = state;
     const ex = getExtra(api.locale);
 
     view.dataset.mode = mode;
     view.dataset.running = String(running);
     view.dataset.status = status;
+    currentSoundEnabled = soundEnabled;
+    currentNextMode = nextMode;
+    currentEditable = status === "ready" || status === "done";
+    currentEditValue = formatClock(
+      status === "done" ? presets[mode] * 60_000 : remainingMs,
+    );
+    if (!currentEditable) closeTimeEdit(false);
+
+    if (soundEnabled !== lastSoundEnabled) {
+      soundBtn.replaceChildren(soundEnabled ? soundOnIcon : soundOffIcon);
+      soundBtn.dataset.muted = String(!soundEnabled);
+      lastSoundEnabled = soundEnabled;
+    }
+    const soundLabel = soundEnabled ? t.soundOn : t.soundOff;
+    soundBtn.setAttribute("aria-label", soundLabel);
+    soundBtn.setAttribute("aria-pressed", String(soundEnabled));
+    soundBtn.title = soundLabel;
 
     for (const m of MODES) {
       const btn = modeButtons.get(m);
@@ -254,7 +351,16 @@ export function mount(root, api) {
 
     timeEl.textContent = formatClock(remainingMs);
     timeEl.dataset.remainingMs = String(remainingMs);
-    const ratio = totalMs > 0 ? Math.min(1, Math.max(0, remainingMs / totalMs)) : 1;
+    timeEl.dataset.editable = String(currentEditable);
+    timeEl.tabIndex = currentEditable ? 0 : -1;
+    timeEl.title = currentEditable ? t.editDurationHint : "";
+    timeInput.setAttribute("aria-label", t.editDurationHint);
+    const ratio =
+      status === "done"
+        ? 1
+        : totalMs > 0
+          ? Math.min(1, Math.max(0, remainingMs / totalMs))
+          : 1;
     ringProgress.setAttribute("stroke-dashoffset", String((1 - ratio) * 100));
 
     statusText.textContent = t[status];
@@ -273,9 +379,18 @@ export function mount(root, api) {
     completeBtn.textContent = ex.complete;
     completeBtn.disabled = status === "ready" || status === "done";
 
+    nextBanner.hidden = status !== "done";
+    if (status === "done") {
+      nextBanner.textContent = `${t.nextHint[nextMode].replace("{min}", String(presets[nextMode]))} →`;
+    }
+
     rhythmLabel.textContent = ex.cycleLabel;
-    const approxMin = completedToday * presets.focus;
-    rhythmMeta.textContent = ex.focusedApprox.replace("{min}", String(approxMin));
+    const todayStats = computeHistoryStats(state.history);
+    const focusedMin =
+      todayStats.todayFocusMinutes > 0
+        ? todayStats.todayFocusMinutes
+        : completedToday * presets.focus;
+    rhythmMeta.textContent = ex.focusedApprox.replace("{min}", String(focusedMin));
     countValue.textContent = String(completedToday);
     countUnit.textContent = ex.roundsUnit;
 
@@ -288,9 +403,18 @@ export function mount(root, api) {
     saveBtn.textContent = ex.save;
     presetStatus.textContent = feedbackKey ? ex[feedbackKey] : "";
     hintFooter.textContent = ex.spaceHint;
+
+    historySection?.update({ ...state, locale: api.locale });
   });
 
   const { signal } = timer;
+  historySection = createHistorySection(doc, win, {
+    onDeleteRecord: (id) => timer.deleteRecord(id),
+    onClearHistory: () => timer.clearHistory(),
+    signal,
+  });
+  view.insertBefore(historySection.element, hintFooter);
+  timer.update();
 
   for (const [mode, btn] of modeButtons) {
     btn.addEventListener("click", () => timer.setMode(mode), { signal });
@@ -298,6 +422,42 @@ export function mount(root, api) {
   toggleBtn.addEventListener("click", timer.toggle, { signal });
   resetBtn.addEventListener("click", timer.reset, { signal });
   completeBtn.addEventListener("click", timer.complete, { signal });
+  timeEl.addEventListener("click", openTimeEdit, { signal });
+  timeEl.addEventListener(
+    "keydown",
+    (event) => {
+      if ((event.key === "Enter" || event.key === " ") && currentEditable) {
+        event.preventDefault();
+        openTimeEdit();
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        closeTimeEdit(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeTimeEdit(false);
+        timeEl.focus({ preventScroll: true });
+      }
+    },
+    { signal },
+  );
+  timeInput.addEventListener("blur", () => closeTimeEdit(true), { signal });
+  nextBanner.addEventListener(
+    "click",
+    () => timer.startNextRound(currentNextMode),
+    { signal },
+  );
+  soundBtn.addEventListener(
+    "click",
+    () => void timer.setSoundEnabled(!currentSoundEnabled).catch(() => {}),
+    { signal },
+  );
   noteInput.addEventListener("input", () => timer.setNote(noteInput.value), { signal });
 
   presetsForm.addEventListener(
