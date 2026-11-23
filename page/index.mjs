@@ -1,4 +1,11 @@
-import { createTimer, formatClock, MODES, PRESETS } from "../shared/timer.mjs";
+import {
+  computeHistoryStats,
+  createTimer,
+  formatClock,
+  MODES,
+  PRESETS,
+} from "../shared/timer.mjs";
+import { createHistorySection } from "./history.mjs";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -246,6 +253,8 @@ export function mount(root, api) {
   dock.append(rhythmCard, presetsForm);
 
   const hintFooter = el(doc, "div", "fp-hint-footer");
+  let timer;
+  let historySection;
   view.append(topBar, stage, dock, hintFooter);
   root.replaceChildren(view);
 
@@ -256,7 +265,7 @@ export function mount(root, api) {
   let feedbackKey = "";
   let feedbackTimer;
 
-  const timer = createTimer(win, api, (state) => {
+  timer = createTimer(win, api, (state) => {
     const {
       t,
       mode,
@@ -337,8 +346,12 @@ export function mount(root, api) {
     }
 
     rhythmLabel.textContent = ex.cycleLabel;
-    const approxMin = completedToday * presets.focus;
-    rhythmMeta.textContent = ex.focusedApprox.replace("{min}", String(approxMin));
+    const todayStats = computeHistoryStats(state.history);
+    const focusedMin =
+      todayStats.todayFocusMinutes > 0
+        ? todayStats.todayFocusMinutes
+        : completedToday * presets.focus;
+    rhythmMeta.textContent = ex.focusedApprox.replace("{min}", String(focusedMin));
     countValue.textContent = String(completedToday);
     countUnit.textContent = ex.roundsUnit;
 
@@ -351,9 +364,18 @@ export function mount(root, api) {
     saveBtn.textContent = ex.save;
     presetStatus.textContent = feedbackKey ? ex[feedbackKey] : "";
     hintFooter.textContent = ex.spaceHint;
+
+    historySection?.update({ ...state, locale: api.locale });
   });
 
   const { signal } = timer;
+  historySection = createHistorySection(doc, win, {
+    onDeleteRecord: (id) => timer.deleteRecord(id),
+    onClearHistory: () => timer.clearHistory(),
+    signal,
+  });
+  view.insertBefore(historySection.element, hintFooter);
+  timer.update();
 
   for (const [mode, btn] of modeButtons) {
     btn.addEventListener("click", () => timer.setMode(mode), { signal });

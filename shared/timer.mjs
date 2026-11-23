@@ -1,6 +1,13 @@
 const STORAGE_KEY = "codexhost.focus-pomodoro.state.v1";
+const HISTORY_STORAGE_KEY = "codexhost.focus-pomodoro.history.v1";
 const CHANGE_EVENT = "codexhost:focus-pomodoro:change";
+const TIMER_KEY = "_timer";
+const HISTORY_KEY = "_history";
+const MAX_RECORDS = 500;
+const NOTE_SYNC_DEBOUNCE_MS = 500;
+
 const sessionState = new WeakMap();
+const sessionHistory = new WeakMap();
 const playedChimes = new WeakMap();
 
 export const PRESETS = {
@@ -25,7 +32,7 @@ const COPY = {
     noteLabel: "Current task",
     notePlaceholder: "What are you focusing on?",
     completedToday: "Pomodoros today",
-    pureFrontendBadge: "Pure frontend · No backend process",
+    pureFrontendBadge: "Pure frontend · Synced via Host",
     presetsTitle: "Preset durations (minutes)",
     savePresets: "Save presets",
     presetsSaved: "Presets saved",
@@ -79,7 +86,7 @@ const COPY = {
     noteLabel: "当前专注任务备注",
     notePlaceholder: "这一轮想完成什么？",
     completedToday: "今日完成番茄",
-    pureFrontendBadge: "纯前端插件 · 无后台进程",
+    pureFrontendBadge: "纯前端 · Host 跨端同步",
     presetsTitle: "预设时长（分钟）",
     savePresets: "保存预设",
     presetsSaved: "预设已保存",
@@ -121,7 +128,7 @@ const COPY = {
   },
 };
 
-function todayKey(ms = Date.now()) {
+export function todayKey(ms = Date.now()) {
   const date = new Date(ms);
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -148,16 +155,6 @@ export function formatClock(ms) {
   return [Math.floor(seconds / 60), seconds % 60]
     .map((n) => String(n).padStart(2, "0"))
     .join(":");
-}
-
-function read(win) {
-  try {
-    const saved = JSON.parse(win.localStorage.getItem(STORAGE_KEY));
-    if (saved && typeof saved === "object") return saved;
-  } catch {
-    // A browser may deny persistent storage.
-  }
-  return sessionState.get(win) ?? {};
 }
 
 export function nextModeFor(mode, completedToday) {
@@ -234,12 +231,35 @@ export function playCompletionChime(win, mode, completionId) {
   }
 }
 
+function readLocal(win, key, fallbackMap) {
+  try {
+    const saved = JSON.parse(win.localStorage.getItem(key));
+    if (saved && typeof saved === "object") return saved;
+  } catch {
+    // A browser may deny persistent storage.
+  }
+  return fallbackMap.get(win) ?? {};
+}
+
+function writeLocal(win, key, fallbackMap, value) {
+  fallbackMap.set(win, value);
+  try {
+    win.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Same-window events and Host storage still synchronize views.
+  }
+}
+
 function normalizeCelebration(raw, fallbackCompleted) {
   if (!raw || typeof raw !== "object") return null;
   if (typeof raw.id !== "string" || !raw.id) return null;
   if (!MODES.includes(raw.mode) || !MODES.includes(raw.nextMode)) return null;
-  const finishedAt = Number.isFinite(raw.finishedAt) ? raw.finishedAt : Date.now();
-  const announcedAt = Number.isFinite(raw.announcedAt) ? raw.announcedAt : finishedAt;
+  const finishedAt = Number.isFinite(raw.finishedAt)
+    ? raw.finishedAt
+    : Date.now();
+  const announcedAt = Number.isFinite(raw.announcedAt)
+    ? raw.announcedAt
+    : finishedAt;
   const completedToday = Number.isInteger(raw.completedToday)
     ? Math.max(0, raw.completedToday)
     : fallbackCompleted;
@@ -260,47 +280,289 @@ function normalizeCelebration(raw, fallbackCompleted) {
 }
 
 function normalize(saved, presets) {
-  const mode = MODES.includes(saved.mode) ? saved.mode : "focus";
+  const mode = MODES.includes(saved?.mode) ? saved.mode : "focus";
   const endAt =
-    saved.running && Number.isFinite(saved.endAt) ? saved.endAt : null;
+    saved?.running && Number.isFinite(saved.endAt) ? saved.endAt : null;
   const roundMs =
-    Number.isFinite(saved.roundMs) && saved.roundMs > 0
+    Number.isFinite(saved?.roundMs) && saved.roundMs > 0
       ? saved.roundMs
       : Math.max(
           presets[mode] * 60_000,
-          Number.isFinite(saved.remainingMs) ? saved.remainingMs : 0,
+          Number.isFinite(saved?.remainingMs) ? saved.remainingMs : 0,
         );
-  let remainingMs = Number.isFinite(saved.remainingMs)
+  let remainingMs = Number.isFinite(saved?.remainingMs)
     ? Math.max(0, saved.remainingMs)
     : null;
   // The page-only release stored its full duration even when no round had started.
   if (
     !endAt &&
-    saved.roundMs === undefined &&
+    saved?.roundMs === undefined &&
     remainingMs === PRESETS[mode].minutes * 60_000
   ) {
     remainingMs = null;
   }
-  const completedToday = Number.isInteger(saved.completedToday)
+  const completedToday = Number.isInteger(saved?.completedToday)
     ? Math.max(0, saved.completedToday)
     : 0;
-  const justFinished = saved.justFinished === true;
+  const justFinished = saved?.justFinished === true;
+  const updatedAt = Number.isFinite(saved?.updatedAt) ? saved.updatedAt : 0;
   return {
     mode,
     running: endAt !== null,
     endAt,
     remainingMs,
     roundMs: remainingMs === null && endAt === null ? null : roundMs,
-    note: typeof saved.note === "string" ? saved.note : "",
+    note: typeof saved?.note === "string" ? saved.note : "",
     completedDate:
-      typeof saved.completedDate === "string"
+      typeof saved?.completedDate === "string"
         ? saved.completedDate
         : todayKey(),
     completedToday,
     justFinished,
     celebration: justFinished
-      ? normalizeCelebration(saved.celebration, completedToday)
+      ? normalizeCelebration(saved?.celebration, completedToday)
       : null,
+    updatedAt,
+  };
+}
+
+function normalizeRecord(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (typeof raw.id !== "string" || !raw.id) return null;
+  if (!MODES.includes(raw.mode)) return null;
+  if (!Number.isFinite(raw.finishedAt)) return null;
+  const minutes = Number.isFinite(raw.minutes)
+    ? Math.max(1, Math.min(240, Math.round(raw.minutes)))
+    : PRESETS[raw.mode].minutes;
+  const date =
+    typeof raw.date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(raw.date)
+      ? raw.date
+      : todayKey(raw.finishedAt);
+  const note =
+    typeof raw.note === "string" ? raw.note.trim().slice(0, 160) : "";
+  return {
+    id: raw.id,
+    mode: raw.mode,
+    finishedAt: raw.finishedAt,
+    date,
+    minutes,
+    note,
+  };
+}
+
+function normalizeArchiveEntry(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const focusCount = Number.isInteger(raw.focusCount)
+    ? Math.max(0, raw.focusCount)
+    : 0;
+  const focusMinutes = Number.isFinite(raw.focusMinutes)
+    ? Math.max(0, Math.round(raw.focusMinutes))
+    : 0;
+  const breakCount = Number.isInteger(raw.breakCount)
+    ? Math.max(0, raw.breakCount)
+    : 0;
+  const breakMinutes = Number.isFinite(raw.breakMinutes)
+    ? Math.max(0, Math.round(raw.breakMinutes))
+    : 0;
+  if (focusCount + focusMinutes + breakCount + breakMinutes === 0) return null;
+  return { focusCount, focusMinutes, breakCount, breakMinutes };
+}
+
+function normalizeHistory(raw) {
+  const updatedAt = Number.isFinite(raw?.updatedAt) ? raw.updatedAt : 0;
+  const seen = new Set();
+  const records = [];
+  if (Array.isArray(raw?.records)) {
+    for (const item of raw.records) {
+      const rec = normalizeRecord(item);
+      if (rec && !seen.has(rec.id)) {
+        seen.add(rec.id);
+        records.push(rec);
+      }
+    }
+  }
+  records.sort((a, b) => b.finishedAt - a.finishedAt);
+
+  const dailyArchive = {};
+  if (raw?.dailyArchive && typeof raw.dailyArchive === "object") {
+    for (const [date, entry] of Object.entries(raw.dailyArchive)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) continue;
+      const clean = normalizeArchiveEntry(entry);
+      if (clean) dailyArchive[date] = clean;
+    }
+  }
+
+  return trimHistory({ records, dailyArchive, updatedAt });
+}
+
+function trimHistory(history) {
+  const records = [...history.records];
+  const dailyArchive = { ...history.dailyArchive };
+  while (records.length > MAX_RECORDS) {
+    const oldest = records.pop();
+    if (!oldest) break;
+    const prev = dailyArchive[oldest.date] ?? {
+      focusCount: 0,
+      focusMinutes: 0,
+      breakCount: 0,
+      breakMinutes: 0,
+    };
+    dailyArchive[oldest.date] =
+      oldest.mode === "focus"
+        ? {
+            ...prev,
+            focusCount: prev.focusCount + 1,
+            focusMinutes: prev.focusMinutes + oldest.minutes,
+          }
+        : {
+            ...prev,
+            breakCount: prev.breakCount + 1,
+            breakMinutes: prev.breakMinutes + oldest.minutes,
+          };
+  }
+  return {
+    records,
+    dailyArchive,
+    updatedAt: history.updatedAt,
+  };
+}
+
+function appendRecord(history, record, updatedAt) {
+  if (history.records.some((item) => item.id === record.id)) {
+    return history;
+  }
+  return trimHistory({
+    records: [record, ...history.records],
+    dailyArchive: history.dailyArchive,
+    updatedAt,
+  });
+}
+
+function mergeHistories(base, incoming) {
+  if (!incoming || (incoming.records.length === 0 && Object.keys(incoming.dailyArchive).length === 0)) {
+    return base;
+  }
+  if (!base || (base.records.length === 0 && Object.keys(base.dailyArchive).length === 0)) {
+    return incoming;
+  }
+  const byId = new Map();
+  for (const rec of base.records) byId.set(rec.id, rec);
+  for (const rec of incoming.records) byId.set(rec.id, rec);
+  const records = [...byId.values()].sort((a, b) => b.finishedAt - a.finishedAt);
+
+  const dailyArchive = { ...base.dailyArchive };
+  for (const [date, entry] of Object.entries(incoming.dailyArchive)) {
+    const existing = dailyArchive[date];
+    if (!existing) {
+      dailyArchive[date] = { ...entry };
+    } else {
+      dailyArchive[date] = {
+        focusCount: Math.max(existing.focusCount, entry.focusCount),
+        focusMinutes: Math.max(existing.focusMinutes, entry.focusMinutes),
+        breakCount: Math.max(existing.breakCount, entry.breakCount),
+        breakMinutes: Math.max(existing.breakMinutes, entry.breakMinutes),
+      };
+    }
+  }
+  return trimHistory({
+    records,
+    dailyArchive,
+    updatedAt: Math.max(base.updatedAt, incoming.updatedAt),
+  });
+}
+
+export function computeHistoryStats(history, now = Date.now()) {
+  const today = todayKey(now);
+  const dailyMap = new Map();
+  const addDay = (date, focusCount, focusMinutes, breakCount, breakMinutes) => {
+    const cur = dailyMap.get(date) ?? {
+      date,
+      focusCount: 0,
+      focusMinutes: 0,
+      breakCount: 0,
+      breakMinutes: 0,
+    };
+    cur.focusCount += focusCount;
+    cur.focusMinutes += focusMinutes;
+    cur.breakCount += breakCount;
+    cur.breakMinutes += breakMinutes;
+    dailyMap.set(date, cur);
+  };
+
+  for (const [date, entry] of Object.entries(history.dailyArchive ?? {})) {
+    addDay(
+      date,
+      entry.focusCount,
+      entry.focusMinutes,
+      entry.breakCount,
+      entry.breakMinutes,
+    );
+  }
+  for (const rec of history.records ?? []) {
+    if (rec.mode === "focus") addDay(rec.date, 1, rec.minutes, 0, 0);
+    else addDay(rec.date, 0, 0, 1, rec.minutes);
+  }
+
+  // Build 7-day window ending today (local calendar days)
+  const dayMs = 86_400_000;
+  const baseDate = new Date(now);
+  baseDate.setHours(12, 0, 0, 0);
+  const last7Days = [];
+  let weekFocusCount = 0;
+  let weekFocusMinutes = 0;
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(baseDate.getTime() - offset * dayMs);
+    const key = todayKey(d.getTime());
+    const entry = dailyMap.get(key) ?? {
+      date: key,
+      focusCount: 0,
+      focusMinutes: 0,
+      breakCount: 0,
+      breakMinutes: 0,
+    };
+    weekFocusCount += entry.focusCount;
+    weekFocusMinutes += entry.focusMinutes;
+    last7Days.push({
+      ...entry,
+      weekday: d.getDay(),
+      isToday: key === today,
+    });
+  }
+
+  let totalFocusCount = 0;
+  let totalFocusMinutes = 0;
+  for (const entry of dailyMap.values()) {
+    totalFocusCount += entry.focusCount;
+    totalFocusMinutes += entry.focusMinutes;
+  }
+
+  const todayEntry = dailyMap.get(today) ?? {
+    date: today,
+    focusCount: 0,
+    focusMinutes: 0,
+    breakCount: 0,
+    breakMinutes: 0,
+  };
+
+  // Consecutive focus-day streak (counts today if >0, or starts from yesterday so streak isn't broken mid-morning)
+  let streakDays = 0;
+  const startOffset = todayEntry.focusCount > 0 ? 0 : 1;
+  for (let offset = startOffset; offset < 3650; offset++) {
+    const d = new Date(baseDate.getTime() - offset * dayMs);
+    const entry = dailyMap.get(todayKey(d.getTime()));
+    if (entry && entry.focusCount > 0) streakDays++;
+    else break;
+  }
+
+  return {
+    todayFocusCount: todayEntry.focusCount,
+    todayFocusMinutes: todayEntry.focusMinutes,
+    weekFocusCount,
+    weekFocusMinutes,
+    totalFocusCount,
+    totalFocusMinutes,
+    streakDays,
+    last7Days,
   };
 }
 
@@ -309,10 +571,22 @@ export function createTimer(win, api, render) {
   const { signal } = lifecycle;
   let presets = presetsFrom();
   let soundEnabled = true;
-  let state = normalize(read(win), presets);
+  let state = normalize(readLocal(win, STORAGE_KEY, sessionState), presets);
+  let history = normalizeHistory(
+    readLocal(win, HISTORY_STORAGE_KEY, sessionHistory),
+  );
+  let hostSynced = false;
   let settingsChanges = 0;
   let interval;
+  let noteSyncTimer;
+  let persistChain = Promise.resolve();
+  let lastMutationTs = 0;
   const cleanup = [];
+
+  function nextTs() {
+    lastMutationTs = Math.max(Date.now(), lastMutationTs + 1);
+    return lastMutationTs;
+  }
 
   function snapshot(now) {
     const totalMs = state.roundMs ?? presets[state.mode] * 60_000;
@@ -337,19 +611,105 @@ export function createTimer(win, api, render) {
       status,
       completedToday,
       nextMode: nextModeFor(state.mode, completedToday),
+      history,
+      hostSynced,
       t: String(api.locale).toLowerCase().startsWith("zh") ? COPY.zh : COPY.en,
     };
   }
-  function publish(patch) {
-    state = { ...state, ...patch };
-    sessionState.set(win, state);
-    try {
-      win.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // The same-window event still synchronizes the two views.
-    }
-    win.dispatchEvent(new win.CustomEvent(CHANGE_EVENT, { detail: state }));
+
+  function broadcastLocal() {
+    writeLocal(win, STORAGE_KEY, sessionState, state);
+    writeLocal(win, HISTORY_STORAGE_KEY, sessionHistory, history);
+    win.dispatchEvent(
+      new win.CustomEvent(CHANGE_EVENT, { detail: { state, history } }),
+    );
   }
+
+  function enqueueHostPersist(mutate) {
+    persistChain = persistChain
+      .catch(() => {})
+      .then(async () => {
+        if (signal.aborted) return;
+        const current = (await api.storage.get()) ?? {};
+        if (signal.aborted) return;
+        const next = mutate(current);
+        if (!next) return;
+        const saved = await api.storage.set(next);
+        if (!signal.aborted) {
+          hostSynced = true;
+          applySettings(saved, { fromOwnWrite: true });
+        }
+      })
+      .catch(() => {
+        // Keep local responsive even if Host RPC is momentarily unavailable.
+      });
+    return persistChain;
+  }
+
+  function syncTimerToHost({ includeHistory = false, replaceHistory = false } = {}) {
+    if (noteSyncTimer !== undefined) {
+      win.clearTimeout(noteSyncTimer);
+      noteSyncTimer = undefined;
+    }
+    const timerSnapshot = { ...state };
+    const historySnapshot = { ...history };
+    return enqueueHostPersist((current) => {
+      const remoteTimer = current[TIMER_KEY];
+      const timerToSave =
+        remoteTimer &&
+        Number.isFinite(remoteTimer.updatedAt) &&
+        remoteTimer.updatedAt > timerSnapshot.updatedAt
+          ? remoteTimer
+          : timerSnapshot;
+      const next = {
+        ...current,
+        [TIMER_KEY]: timerToSave,
+      };
+      if (includeHistory) {
+        if (replaceHistory) {
+          next[HISTORY_KEY] = historySnapshot;
+        } else {
+          const remoteHistory = normalizeHistory(current[HISTORY_KEY]);
+          next[HISTORY_KEY] = mergeHistories(remoteHistory, historySnapshot);
+        }
+      }
+      return next;
+    });
+  }
+
+  function scheduleNoteSync() {
+    if (noteSyncTimer !== undefined) win.clearTimeout(noteSyncTimer);
+    noteSyncTimer = win.setTimeout(() => {
+      noteSyncTimer = undefined;
+      if (!signal.aborted) void syncTimerToHost();
+    }, NOTE_SYNC_DEBOUNCE_MS);
+  }
+
+  function publish(patch, options = {}) {
+    const {
+      sync = "immediate",
+      record = null,
+      nextHistory = null,
+      replaceHistory = false,
+    } = options;
+    const ts = nextTs();
+    state = { ...state, ...patch, updatedAt: ts };
+    if (nextHistory) {
+      history = { ...nextHistory, updatedAt: ts };
+    } else if (record) {
+      history = appendRecord(history, record, ts);
+    }
+    broadcastLocal();
+    if (sync === "immediate") {
+      void syncTimerToHost({
+        includeHistory: Boolean(record || nextHistory),
+        replaceHistory,
+      });
+    } else if (sync === "debounced") {
+      scheduleNoteSync();
+    }
+  }
+
   function finish(now) {
     if (state.justFinished || (!state.running && state.remainingMs === null))
       return;
@@ -361,25 +721,39 @@ export function createTimer(win, api, render) {
     const totalMs = state.roundMs ?? presets[state.mode] * 60_000;
     const durationMinutes = Math.max(1, Math.round(totalMs / 60_000));
     const announcedAt = Date.now();
-    publish({
-      running: false,
-      endAt: null,
-      remainingMs: 0,
-      justFinished: true,
-      completedDate,
-      completedToday,
-      celebration: {
-        id: `${now}-${state.mode}-${completedToday}`,
-        mode: state.mode,
-        nextMode,
+    const id = `${now}-${state.mode}-${completedToday}`;
+    const trimmedNote = state.note.trim().slice(0, 160);
+    const record = {
+      id,
+      mode: state.mode,
+      finishedAt: now,
+      date: completedDate,
+      minutes: durationMinutes,
+      note: trimmedNote,
+    };
+    publish(
+      {
+        running: false,
+        endAt: null,
+        remainingMs: 0,
+        justFinished: true,
+        completedDate,
         completedToday,
-        note: state.note.trim(),
-        finishedAt: now,
-        announcedAt,
-        durationMinutes,
+        celebration: {
+          id,
+          mode: state.mode,
+          nextMode,
+          completedToday,
+          note: trimmedNote,
+          finishedAt: now,
+          announcedAt,
+          durationMinutes,
+        },
       },
-    });
+      { sync: "immediate", record },
+    );
   }
+
   function update() {
     if (signal.aborted) return;
     const now = Date.now();
@@ -391,14 +765,76 @@ export function createTimer(win, api, render) {
     if (interval !== undefined) win.clearTimeout(interval);
     interval = win.setTimeout(update, state.running ? 250 : 60_000);
   }
-  function receive(saved) {
-    state = normalize(saved, presets);
+
+  function receive(detail) {
+    if (detail && typeof detail === "object" && "state" in detail) {
+      state = normalize(detail.state, presets);
+      if (detail.history) history = normalizeHistory(detail.history);
+    } else {
+      state = normalize(detail, presets);
+    }
+    lastMutationTs = Math.max(
+      lastMutationTs,
+      state.updatedAt,
+      history.updatedAt,
+    );
     update();
   }
+
+  function applySettings(values = {}, { initial = false, fromOwnWrite = false } = {}) {
+    presets = presetsFrom(values);
+    soundEnabled = values.soundEnabled !== false;
+    hostSynced = true;
+
+    let localChanged = false;
+    const remoteTimerRaw = values[TIMER_KEY];
+    if (remoteTimerRaw && typeof remoteTimerRaw === "object") {
+      const remoteTimer = normalize(remoteTimerRaw, presets);
+      if (remoteTimer.updatedAt > state.updatedAt) {
+        state = remoteTimer;
+        lastMutationTs = Math.max(lastMutationTs, remoteTimer.updatedAt);
+        localChanged = true;
+      }
+    }
+
+    const remoteHistoryRaw = values[HISTORY_KEY];
+    if (remoteHistoryRaw && typeof remoteHistoryRaw === "object") {
+      const remoteHistory = normalizeHistory(remoteHistoryRaw);
+      if (fromOwnWrite || remoteHistory.updatedAt > history.updatedAt) {
+        history = remoteHistory;
+        lastMutationTs = Math.max(lastMutationTs, remoteHistory.updatedAt);
+        localChanged = true;
+      } else if (initial) {
+        const merged = mergeHistories(history, remoteHistory);
+        if (
+          merged.records.length !== history.records.length ||
+          Object.keys(merged.dailyArchive).length !==
+            Object.keys(history.dailyArchive).length
+        ) {
+          history = merged;
+          localChanged = true;
+        }
+      }
+    } else if (
+      initial &&
+      (history.records.length > 0 || state.updatedAt > 0)
+    ) {
+      // One-time migration: push existing local state/history up to shared Host storage.
+      void syncTimerToHost({ includeHistory: history.records.length > 0 });
+    }
+
+    if (localChanged) {
+      writeLocal(win, STORAGE_KEY, sessionState, state);
+      writeLocal(win, HISTORY_STORAGE_KEY, sessionHistory, history);
+    }
+    update();
+  }
+
   function dispose() {
     if (signal.aborted) return;
     lifecycle.abort();
     win.clearTimeout(interval);
+    if (noteSyncTimer !== undefined) win.clearTimeout(noteSyncTimer);
     for (const stop of cleanup.splice(0)) stop();
   }
 
@@ -411,19 +847,23 @@ export function createTimer(win, api, render) {
   win.addEventListener(
     "storage",
     (event) => {
-      if (event.key !== STORAGE_KEY && event.key !== null) return;
+      if (
+        event.key !== STORAGE_KEY &&
+        event.key !== HISTORY_STORAGE_KEY &&
+        event.key !== null
+      )
+        return;
       sessionState.delete(win);
-      receive(read(win));
+      sessionHistory.delete(win);
+      receive({
+        state: readLocal(win, STORAGE_KEY, sessionState),
+        history: readLocal(win, HISTORY_STORAGE_KEY, sessionHistory),
+      });
     },
     { signal },
   );
   win.document.addEventListener("visibilitychange", update, { signal });
   cleanup.push(api.onLocaleChange(update));
-  const applySettings = (values = {}) => {
-    presets = presetsFrom(values);
-    soundEnabled = values.soundEnabled !== false;
-    update();
-  };
   cleanup.push(
     api.storage.onChange((values) => {
       settingsChanges++;
@@ -433,7 +873,9 @@ export function createTimer(win, api, render) {
   void api.storage
     .get()
     .then((values) => {
-      if (!signal.aborted && settingsChanges === 0) applySettings(values);
+      if (!signal.aborted && settingsChanges === 0) {
+        applySettings(values, { initial: true });
+      }
     })
     .catch(() => {});
   update();
@@ -504,7 +946,8 @@ export function createTimer(win, api, render) {
         state.completedDate === todayKey(now) ? state.completedToday : 0;
       const mode = MODES.includes(targetMode)
         ? targetMode
-        : (state.celebration?.nextMode ?? nextModeFor(state.mode, completedToday));
+        : (state.celebration?.nextMode ??
+            nextModeFor(state.mode, completedToday));
       const roundMs = presets[mode] * 60_000;
       publish({
         mode,
@@ -517,33 +960,65 @@ export function createTimer(win, api, render) {
       });
     },
     setNote(note) {
-      if (note !== state.note) publish({ note });
+      if (note !== state.note) publish({ note }, { sync: "debounced" });
+    },
+    deleteRecord(recordId) {
+      const target = history.records.find((item) => item.id === recordId);
+      if (!target) return;
+      const nextRecords = history.records.filter((item) => item.id !== recordId);
+      const today = todayKey();
+      const patch =
+        target.mode === "focus" &&
+        target.date === today &&
+        state.completedDate === today &&
+        state.completedToday > 0
+          ? { completedToday: state.completedToday - 1 }
+          : {};
+      publish(patch, {
+        sync: "immediate",
+        nextHistory: {
+          records: nextRecords,
+          dailyArchive: history.dailyArchive,
+        },
+        replaceHistory: true,
+      });
+    },
+    clearHistory() {
+      if (
+        history.records.length === 0 &&
+        Object.keys(history.dailyArchive).length === 0
+      )
+        return;
+      publish(
+        { completedToday: 0, completedDate: todayKey() },
+        {
+          sync: "immediate",
+          nextHistory: { records: [], dailyArchive: {} },
+          replaceHistory: true,
+        },
+      );
     },
     async setSoundEnabled(enabled) {
       const nextValue = Boolean(enabled);
       soundEnabled = nextValue;
       update();
-      const current = await api.storage.get();
-      const saved = await api.storage.set({
+      await enqueueHostPersist((current) => ({
         ...current,
         soundEnabled: nextValue,
-      });
-      if (!signal.aborted) applySettings(saved);
+      }));
     },
     async savePresets(durations) {
-      const current = await api.storage.get();
       const next = presetsFrom(
         Object.fromEntries(
           MODES.map((mode) => [PRESETS[mode].key, durations[mode]]),
         ),
       );
-      const saved = await api.storage.set({
+      await enqueueHostPersist((current) => ({
         ...current,
         ...Object.fromEntries(
           MODES.map((mode) => [PRESETS[mode].key, next[mode]]),
         ),
-      });
-      if (!signal.aborted) applySettings(saved);
+      }));
     },
   };
 }
