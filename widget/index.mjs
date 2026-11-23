@@ -10,6 +10,7 @@ const POSITION_KEY = "codexhost.focus-pomodoro.widget-pos.v1";
 const SNAP_DISTANCE = 32;
 const DRAG_THRESHOLD = 5;
 const TUCK_RATIO = 0.44;
+const IDLE_PEEK_PX = 36;
 const PANEL_GAP = 10;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -66,6 +67,7 @@ function positionCapsule(view, capsule, expand, panel, win, signal) {
   let dragged = false;
   let panelSize;
   view.style.setProperty("--fp-tuck", `${TUCK_RATIO * 100}%`);
+  view.style.setProperty("--fp-idle-peek", `${IDLE_PEEK_PX}px`);
 
   function measurePanel() {
     const width = panel.offsetWidth;
@@ -170,7 +172,7 @@ function positionCapsule(view, capsule, expand, panel, win, signal) {
 
   function moveDuringDrag(x, y) {
     const { width, height, w, h } = bounds;
-    const tuck = width * TUCK_RATIO;
+    const tuck = Math.max(width * TUCK_RATIO, width - IDLE_PEEK_PX);
     move(clamp(x, -tuck, w - width + tuck), clamp(y, 0, h - height));
   }
 
