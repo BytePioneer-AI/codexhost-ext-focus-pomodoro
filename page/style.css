@@ -44,8 +44,38 @@
 /* Segmented mode pill */
 .fp-topbar {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 8px;
   width: 100%;
+}
+
+.fp-sound-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--cx-page-border, rgba(15, 23, 42, 0.08));
+  background: var(--cx-page-surface, rgba(15, 23, 42, 0.05));
+  color: var(--cx-page-text-muted, #6b7280);
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.fp-sound-btn:hover {
+  color: var(--cx-page-text, #111827);
+  border-color: color-mix(in srgb, var(--fp-tone) 36%, var(--cx-page-border, #ccc));
+}
+
+.fp-sound-btn[data-muted="true"] {
+  opacity: 0.65;
+}
+
+.fp-sound-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .fp-modes {
@@ -112,9 +142,14 @@
   transition: opacity 320ms ease, transform 320ms ease;
 }
 
-.fp-root[data-running="true"] .fp-dial-halo {
+.fp-root[data-running="true"] .fp-dial-halo,
+.fp-root[data-status="done"] .fp-dial-halo {
   opacity: 1;
   animation: fp-breathe 4.2s ease-in-out infinite;
+}
+
+.fp-root[data-status="done"] .fp-dial-halo {
+  animation-duration: 2.6s;
 }
 
 @keyframes fp-breathe {
@@ -188,7 +223,8 @@
   transition: background-color 200ms ease, box-shadow 200ms ease;
 }
 
-.fp-root[data-running="true"] .fp-status-dot {
+.fp-root[data-running="true"] .fp-status-dot,
+.fp-root[data-status="done"] .fp-status-dot {
   background: var(--fp-tone);
   box-shadow: 0 0 0 4px var(--fp-tone-soft);
 }
@@ -198,6 +234,10 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--cx-page-text-muted, #6b7280);
+}
+
+.fp-root[data-status="done"] .fp-state-label {
+  color: var(--fp-tone);
 }
 
 .fp-time {
@@ -328,6 +368,36 @@
 .fp-btn-outline:hover:not(:disabled) {
   border-color: var(--fp-tone);
   color: var(--fp-tone);
+}
+
+.fp-next-banner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--fp-tone) 32%, transparent);
+  background: var(--fp-tone-soft);
+  color: color-mix(in srgb, var(--fp-tone) 82%, var(--cx-page-text, #111827));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 150ms ease;
+}
+
+.fp-next-banner:hover {
+  background: color-mix(in srgb, var(--fp-tone) 18%, transparent);
+  transform: translateY(-1px);
+}
+
+.fp-next-banner:active {
+  transform: scale(0.97);
+}
+
+.fp-next-banner[hidden] {
+  display: none;
 }
 
 /* Quiet Bottom Dock */
@@ -466,7 +536,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fp-root[data-running="true"] .fp-dial-halo {
+  .fp-root[data-running="true"] .fp-dial-halo,
+  .fp-root[data-status="done"] .fp-dial-halo {
     animation: none;
   }
 }

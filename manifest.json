@@ -5,14 +5,14 @@
     "en": "Focus Pomodoro",
     "zh-CN": "专注番茄钟"
   },
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": {
-    "en": "Calm Pomodoro timer with a draggable edge-docking capsule and minimalist focus studio page across Codex Desktop and CH Web.",
-    "zh-CN": "轻量优雅的专注番茄钟：支持自由拖动与贴边半隐的主页面悬浮胶囊，以及沉浸式独立计时页，倒计时与任务备注实时同步。"
+    "en": "Calm Pomodoro timer with a draggable edge-docking capsule, completion celebration animation, and minimalist focus studio page across Codex Desktop and CH Web.",
+    "zh-CN": "轻量优雅的专注番茄钟：支持自由拖动与贴边半隐的主页面悬浮胶囊、倒计时完成仪式感动画与提示音，以及沉浸式独立计时页，倒计时与任务备注实时同步。"
   },
   "details": {
-    "en": "### Highlights\n\n- **Draggable & Edge-Docking Capsule**: Drag the compact timer pill anywhere on your workspace; dock it near the left or right edge to tuck away neatly.\n- **Nearby Quick Popover**: Click the capsule to switch modes, edit your current focus task, or pause without leaving your conversation.\n- **Minimal Focus Studio Page**: Clean 60-tick dial, mode-adaptive palette, 4-round focus rhythm tracker, and custom duration presets.",
-    "zh-CN": "### 特点\n\n- **自由拖动与贴边半隐胶囊**：聊天页悬浮胶囊可拖到屏幕任意位置，贴近左右边缘自动半收起不挡内容，悬停顺滑探出。\n- **附近轻量控制浮窗**：点击胶囊在附近弹出紧凑控制窗，随时切模式、改专注备注、开始或暂停，全程不离开对话。\n- **极简专注独立页**：精密 60 刻度计时盘、随模式柔和变色、4 轮今日节奏指示与自定义预设时长。"
+    "en": "### Highlights\n\n- **Completion Celebration & Chime**: When time is up, an animated completion card appears in the center of your workspace with ripple rings, particle burst, optional gentle chime, and one-click transition to your recommended break or next focus round.\n- **Draggable & Edge-Docking Capsule**: Drag the compact timer pill anywhere on your workspace; dock it near the left or right edge to tuck away neatly.\n- **Nearby Quick Popover**: Click the capsule to switch modes, edit your current focus task, toggle completion sound, or pause without leaving your conversation.\n- **Minimal Focus Studio Page**: Clean 60-tick dial, mode-adaptive palette, 4-round focus rhythm tracker, and custom duration presets.",
+    "zh-CN": "### 特点\n\n- **倒计时完成动画与柔和提示音**：每轮时间结束时在屏幕中央弹出柔和的完成庆祝动画（脉冲光环、微粒绽放与进度徽章），配合可选轻柔提示音，并支持一键进入建议的短休、长休或下一轮专注。\n- **自由拖动与贴边半隐胶囊**：聊天页悬浮胶囊可拖到屏幕任意位置，贴近左右边缘自动半收起不挡内容，悬停顺滑探出。\n- **附近轻量控制浮窗**：点击胶囊在附近弹出紧凑控制窗，随时切模式、改专注备注、开关提示音、开始或暂停，全程不离开对话。\n- **极简专注独立页**：精密 60 刻度计时盘、随模式柔和变色、4 轮今日节奏指示与自定义预设时长。"
   },
   "author": "codexhost",
   "categories": [
@@ -54,6 +54,19 @@
       "max": 90,
       "step": 1,
       "default": 15
+    },
+    {
+      "key": "soundEnabled",
+      "type": "boolean",
+      "label": {
+        "en": "Completion Chime",
+        "zh-CN": "完成提示音"
+      },
+      "description": {
+        "en": "Play a gentle chime when a focus or break round completes.",
+        "zh-CN": "专注或休息倒计时结束时播放柔和提示音。"
+      },
+      "default": true
     }
   ],
   "widget": {

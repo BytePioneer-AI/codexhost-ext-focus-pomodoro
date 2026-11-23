@@ -1,4 +1,10 @@
-import { createTimer, formatClock, MODES } from "../shared/timer.mjs";
+import {
+  createTimer,
+  formatClock,
+  MODES,
+  playCompletionChime,
+} from "../shared/timer.mjs";
+import { createCelebrationOverlay } from "./celebration.mjs";
 
 const POSITION_KEY = "codexhost.focus-pomodoro.widget-pos.v1";
 const SNAP_DISTANCE = 32;
@@ -312,9 +318,22 @@ export function mount(root, api) {
   const header = make("header", "header");
   const title = make("strong");
   title.id = "fp-timer-title";
+  const headerRight = make("div", "header-right");
+  const soundBtn = make("button", "sound");
+  const soundOnIcon = icon(
+    doc,
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10-1.2a4 4 0 0 1 0 5.4m2.1-7.5a7 7 0 0 1 0 9.6",
+    { "stroke-width": "1.5" },
+  );
+  const soundOffIcon = icon(
+    doc,
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10 0 4 4m0-4-4 4",
+    { "stroke-width": "1.5" },
+  );
   const status = make("span", "status");
   status.setAttribute("role", "status");
-  header.append(title, status);
+  headerRight.append(soundBtn, status);
+  header.append(title, headerRight);
   const modeGroup = make("div", "modes");
   const modes = MODES.map((mode) => {
     const button = make("button");
@@ -330,7 +349,9 @@ export function mount(root, api) {
   track.setAttribute("aria-hidden", "true");
   const progress = make("span", "progress");
   track.append(progress);
-  face.append(panelTime, track);
+  const nextChip = make("button", "next-chip");
+  nextChip.hidden = true;
+  face.append(panelTime, track, nextChip);
 
   const label = make("label", "note");
   const noteLabel = make("span");
@@ -354,27 +375,72 @@ export function mount(root, api) {
   dots.append(...rounds);
   footer.append(countGroup, dots);
   panel.append(header, modeGroup, face, label, actions, footer);
-  view.append(capsule, panel);
+
+  let timer;
+  const celebration = createCelebrationOverlay(doc, {
+    onDismiss: () => timer?.dismissCelebration(),
+    onStartNext: (nextMode) => timer?.startNextRound(nextMode),
+  });
+
+  view.append(capsule, panel, celebration.element);
   root.replaceChildren(view);
 
   const setText = (node, text) => {
     if (node.textContent !== text) node.textContent = text;
   };
   let lastRunning;
-  const timer = createTimer(win, api, (state) => {
-    const { t, mode, running, remainingMs, totalMs, completedToday } = state;
+  let lastSoundEnabled;
+  let currentSoundEnabled = true;
+  let currentNextMode = "short";
+  timer = createTimer(win, api, (state) => {
+    const {
+      t,
+      mode,
+      running,
+      remainingMs,
+      totalMs,
+      completedToday,
+      presets,
+      soundEnabled,
+      nextMode,
+    } = state;
     view.dataset.mode = mode;
     view.dataset.running = String(running);
+    view.dataset.status = state.status;
+    view.dataset.celebrating = String(Boolean(state.celebration));
+    currentSoundEnabled = soundEnabled;
+    currentNextMode = nextMode;
+
     if (running !== lastRunning)
       toggleGlyph.replaceChildren(running ? pause : play);
     lastRunning = running;
+
+    if (soundEnabled !== lastSoundEnabled) {
+      soundBtn.replaceChildren(soundEnabled ? soundOnIcon : soundOffIcon);
+      soundBtn.dataset.muted = String(!soundEnabled);
+      lastSoundEnabled = soundEnabled;
+    }
+    const soundLabel = soundEnabled ? t.soundOn : t.soundOff;
+    soundBtn.setAttribute("aria-label", soundLabel);
+    soundBtn.setAttribute("aria-pressed", String(soundEnabled));
+    soundBtn.title = soundLabel;
+
     const clock = formatClock(remainingMs);
     setText(time, clock);
     setText(panelTime, clock);
     progress.style.setProperty(
       "--fp-progress",
-      clamp(remainingMs / totalMs, 0, 1),
+      state.status === "done" ? 1 : clamp(remainingMs / totalMs, 0, 1),
     );
+    const showNextChip = state.status === "done";
+    nextChip.hidden = !showNextChip;
+    if (showNextChip) {
+      setText(
+        nextChip,
+        `${t.nextHint[nextMode].replace("{min}", String(presets[nextMode]))} →`,
+      );
+    }
+
     const action = running ? t.pause : t.start;
     toggle.setAttribute("aria-label", action);
     toggle.title = action;
@@ -405,9 +471,29 @@ export function mount(root, api) {
       setText(button, t.modes[value]);
       button.setAttribute("aria-pressed", String(value === mode));
     }
+
+    celebration.update(state);
+    if (
+      state.celebration &&
+      soundEnabled &&
+      Date.now() - state.celebration.announcedAt < 10_000
+    ) {
+      playCompletionChime(win, state.celebration.mode, state.celebration.id);
+    }
   });
 
   const { signal } = timer;
+  win.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || event.isComposing || !celebration.isOpen())
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      timer.dismissCelebration();
+    },
+    { capture: true, signal },
+  );
   positionCapsule(view, capsule, expand, panel, win, signal);
   const unsubscribeScheme = api.onColorSchemeChange((scheme) => {
     view.dataset.scheme = scheme;
@@ -419,6 +505,16 @@ export function mount(root, api) {
   panelToggle.addEventListener("click", timer.toggle, { signal });
   reset.addEventListener("click", timer.reset, { signal });
   complete.addEventListener("click", timer.complete, { signal });
+  nextChip.addEventListener(
+    "click",
+    () => timer.startNextRound(currentNextMode),
+    { signal },
+  );
+  soundBtn.addEventListener(
+    "click",
+    () => void timer.setSoundEnabled(!currentSoundEnabled).catch(() => {}),
+    { signal },
+  );
   note.addEventListener("input", () => timer.setNote(note.value), { signal });
   return () => {
     timer.dispose();

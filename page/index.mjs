@@ -100,7 +100,7 @@ export function mount(root, api) {
   view.dataset.fpHost = api.hostTarget;
   view.dataset.scheme = api.colorScheme;
 
-  // 1. Centered Segmented Mode Bar
+  // 1. Centered Segmented Mode Bar + Sound Toggle
   const topBar = el(doc, "div", "fp-topbar");
   const modeGroup = el(doc, "div", "fp-modes");
   modeGroup.setAttribute("role", "group");
@@ -112,7 +112,29 @@ export function mount(root, api) {
     modeGroup.append(btn);
     modeButtons.set(mode, btn);
   }
-  topBar.append(modeGroup);
+  const soundBtn = el(doc, "button", "fp-sound-btn");
+  soundBtn.type = "button";
+  const makeSoundIcon = (d) => {
+    const svg = doc.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 20 20");
+    svg.setAttribute("aria-hidden", "true");
+    const path = doc.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.6");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    return svg;
+  };
+  const soundOnIcon = makeSoundIcon(
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10-1.2a4 4 0 0 1 0 5.4m2.1-7.5a7 7 0 0 1 0 9.6",
+  );
+  const soundOffIcon = makeSoundIcon(
+    "M3.5 8.5h3l4-3.5v10l-4-3.5h-3zm10 0 4 4m0-4-4 4",
+  );
+  topBar.append(modeGroup, soundBtn);
 
   // 2. Hero Zen Chronometer Stage
   const stage = el(doc, "section", "fp-stage");
@@ -157,7 +179,12 @@ export function mount(root, api) {
   completeBtn.setAttribute("data-fp-complete", "");
 
   controls.append(resetBtn, toggleBtn, completeBtn);
-  stage.append(dialWrap, intentWrap, controls);
+
+  const nextBanner = el(doc, "button", "fp-next-banner");
+  nextBanner.type = "button";
+  nextBanner.hidden = true;
+
+  stage.append(dialWrap, intentWrap, controls, nextBanner);
 
   // 3. Quiet Bottom Bar (Today's Rhythm + Compact Inline Presets)
   const dock = el(doc, "div", "fp-dock");
@@ -223,16 +250,42 @@ export function mount(root, api) {
   root.replaceChildren(view);
 
   let lastPresets;
+  let lastSoundEnabled;
+  let currentSoundEnabled = true;
+  let currentNextMode = "short";
   let feedbackKey = "";
   let feedbackTimer;
 
   const timer = createTimer(win, api, (state) => {
-    const { t, mode, remainingMs, totalMs, presets, running, status, completedToday } = state;
+    const {
+      t,
+      mode,
+      remainingMs,
+      totalMs,
+      presets,
+      running,
+      status,
+      completedToday,
+      soundEnabled,
+      nextMode,
+    } = state;
     const ex = getExtra(api.locale);
 
     view.dataset.mode = mode;
     view.dataset.running = String(running);
     view.dataset.status = status;
+    currentSoundEnabled = soundEnabled;
+    currentNextMode = nextMode;
+
+    if (soundEnabled !== lastSoundEnabled) {
+      soundBtn.replaceChildren(soundEnabled ? soundOnIcon : soundOffIcon);
+      soundBtn.dataset.muted = String(!soundEnabled);
+      lastSoundEnabled = soundEnabled;
+    }
+    const soundLabel = soundEnabled ? t.soundOn : t.soundOff;
+    soundBtn.setAttribute("aria-label", soundLabel);
+    soundBtn.setAttribute("aria-pressed", String(soundEnabled));
+    soundBtn.title = soundLabel;
 
     for (const m of MODES) {
       const btn = modeButtons.get(m);
@@ -254,7 +307,12 @@ export function mount(root, api) {
 
     timeEl.textContent = formatClock(remainingMs);
     timeEl.dataset.remainingMs = String(remainingMs);
-    const ratio = totalMs > 0 ? Math.min(1, Math.max(0, remainingMs / totalMs)) : 1;
+    const ratio =
+      status === "done"
+        ? 1
+        : totalMs > 0
+          ? Math.min(1, Math.max(0, remainingMs / totalMs))
+          : 1;
     ringProgress.setAttribute("stroke-dashoffset", String((1 - ratio) * 100));
 
     statusText.textContent = t[status];
@@ -272,6 +330,11 @@ export function mount(root, api) {
     resetBtn.textContent = ex.reset;
     completeBtn.textContent = ex.complete;
     completeBtn.disabled = status === "ready" || status === "done";
+
+    nextBanner.hidden = status !== "done";
+    if (status === "done") {
+      nextBanner.textContent = `${t.nextHint[nextMode].replace("{min}", String(presets[nextMode]))} →`;
+    }
 
     rhythmLabel.textContent = ex.cycleLabel;
     const approxMin = completedToday * presets.focus;
@@ -298,6 +361,16 @@ export function mount(root, api) {
   toggleBtn.addEventListener("click", timer.toggle, { signal });
   resetBtn.addEventListener("click", timer.reset, { signal });
   completeBtn.addEventListener("click", timer.complete, { signal });
+  nextBanner.addEventListener(
+    "click",
+    () => timer.startNextRound(currentNextMode),
+    { signal },
+  );
+  soundBtn.addEventListener(
+    "click",
+    () => void timer.setSoundEnabled(!currentSoundEnabled).catch(() => {}),
+    { signal },
+  );
   noteInput.addEventListener("input", () => timer.setNote(noteInput.value), { signal });
 
   presetsForm.addEventListener(
